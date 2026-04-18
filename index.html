@@ -445,8 +445,8 @@
         window.addEventListener('unload', () => { setUserStatus('offline'); });
         window.addEventListener('beforeunload', () => { setUserStatus('offline'); });
 
-        // ==========================================
-        // AUTHENTICATION & SETTINGS
+                // ==========================================
+        // AUTHENTICATION
         // ==========================================
         window.toggleAuthView = function(view) {
             if (view === 'signup') {
@@ -458,30 +458,13 @@
             }
         };
 
-        document.getElementById('btn-settings').addEventListener('click', () => {
-            const myProfile = allUsersMap[currentUser.uid];
-            if (myProfile) {
-                document.getElementById('settings-username-input').value = myProfile.username || '';
-                document.getElementById('settings-color-input').value = myProfile.nameColor || '#ffffff';
-            }
-            document.getElementById('settings-modal').classList.remove('hidden');
-        });
-        document.getElementById('close-settings').addEventListener('click', () => document.getElementById('settings-modal').classList.add('hidden'));
-
-        document.getElementById('btn-save-profile').addEventListener('click', async () => {
-            const newName = document.getElementById('settings-username-input').value.trim();
-            const newColor = document.getElementById('settings-color-input').value;
-            if (newName && currentUser) {
-                await setDoc(doc(db, "users", currentUser.uid), { username: newName, nameColor: newColor }, { merge: true });
-                document.getElementById('settings-modal').classList.add('hidden'); showToast("Success", "Profile updated successfully!");
-            }
-        });
-          function urlBase64ToUint8Array(base64String) { const padding = '='.repeat((4 - base64String.length % 4) % 4); const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/'); const rawData = window.atob(base64); const outputArray = new Uint8Array(rawData.length); for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); } return outputArray; }
-
         document.getElementById('signup-form').addEventListener('submit', async (e) => {
-            e.preventDefault(); unlockAudio(); 
+            e.preventDefault(); 
+            unlockAudio(); 
+            
             const username = document.getElementById('signup-username').value.trim(); 
             const password = document.getElementById('signup-password').value; 
+            
             if (!username) return document.getElementById('signup-error').textContent = "Username required";
             
             // Create a fake email behind the scenes so Firebase Auth allows it
@@ -489,14 +472,21 @@
 
             try { 
                 const cred = await createUserWithEmailAndPassword(auth, fakeEmail, password); 
-                await setDoc(doc(db, "users", cred.user.uid), { uid: cred.user.uid, username: username, nameColor: '#ffffff', status: 'online' }); 
+                await setDoc(doc(db, "users", cred.user.uid), { 
+                    uid: cred.user.uid, 
+                    username: username, 
+                    nameColor: '#ffffff', 
+                    status: 'online' 
+                }); 
             } catch (error) { 
                 document.getElementById('signup-error').textContent = error.message; 
             }
         });
 
         document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault(); unlockAudio(); 
+            e.preventDefault(); 
+            unlockAudio(); 
+            
             const username = document.getElementById('login-username').value.trim(); 
             const password = document.getElementById('login-password').value; 
             const fakeEmail = username.toLowerCase().replace(/[^a-z0-9]/g, '') + "@smelly.local";
