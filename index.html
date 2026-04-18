@@ -1023,8 +1023,15 @@
                     const senderProfile = allUsersMap[data.senderId]; const isMe = data.senderId === currentUser.uid;
 
                     let contentHTML = '';
-                    if (data.type === 'image') { contentHTML = `<img src="${decryptedText}" class="msg-image" alt="Shared Image" onclick="openLightbox(this.src)" onload="scrollToBottom()">`; } else { contentHTML = `<div class="msg-text">${decryptedText}</div>`; }
-                    let quotedHTML = ''; if (data.replyToId && data.replyToText) { const safeReplyText = data.replyToText.replace(/</g, "&lt;").replace(/>/g, "&gt;"); quotedHTML = `<div class="quoted-message" onclick="scrollToMsg('${data.replyToId}')">${safeReplyText}</div>`; }
+                    if (data.type === 'image') { 
+                        contentHTML = `<img src="${decryptedText}" class="msg-image" alt="Shared Image" onclick="openLightbox(this.src)" onload="scrollToBottom()">`; 
+                    } else { 
+                        // NEW: Markdown Formatter! (Parses **bold** and *italics*)
+                        let formattedText = decryptedText.replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/\*(.*?)\*/g, '<em>$1</em>');
+                        contentHTML = `<div class="msg-text">${formattedText}</div>`; 
+                    }
 
                     let reactionsHTML = '<div class="reactions-container">';
                     if (data.reactions) { for (const [emoji, users] of Object.entries(data.reactions)) { if (users.length > 0) { const iReacted = users.includes(currentUser.uid); reactionsHTML += `<span class="reaction-badge ${iReacted ? 'active' : ''}" onclick="toggleReaction('${msgId}', '${emoji}')">${emoji} ${users.length}</span>`; } } }
@@ -1050,26 +1057,76 @@
         }
 
         // ==========================================
-        // SENDING MESSAGES
+        // SENDING MESSAGES & SLASH COMMANDS
         // ==========================================
         document.getElementById('message-form').addEventListener('submit', async (e) => {
-            e.preventDefault(); const input = document.getElementById('message-input'); const text = input.value.trim();
-            if (text && currentChatId) {
-                try {
-                    playPopSound();
-                    const payload = { type: 'text', ciphertext: CryptoJS.AES.encrypt(text, GLOBAL_OBFUSCATION_KEY).toString(), senderId: currentUser.uid, createdAt: serverTimestamp(), isPinned: false, isEdited: false, reactions: {} };
-                    if (replyingToMsg) { payload.replyToId = replyingToMsg.id; payload.replyToText = replyingToMsg.text; cancelReply(); }
-                    await addDoc(collection(db, 'chats', currentChatId, 'messages'), payload);
-                    
-                    if (!currentChatUser.isGroup) {
-                        await setDoc(doc(db, 'chats_meta', currentChatId), { unreadBy: currentChatUser.uid, typing: null }, { merge: true });
+            e.preventDefault(); 
+            const input = document.getElementById('message-input'); 
+            let text = input.value.trim();
+            if (!text || !currentChatId) return;
+
+            // --- THE SLASH COMMAND ENGINE ---
+            if (text.startsWith('/')) {
+                const parts = text.split(' ');
+                const cmd = parts[0].toLowerCase();
+                const args = parts.slice(1).join(' ');
+
+                if (cmd === '/shrug') {
+                    text = args ? `${args} ¯\\_(ツ)_/¯` : `¯\\_(ツ)_/¯`;
+                } 
+                else if (cmd === '/roll') {
+                    const match = args.match(/(\d+)?d(\d+)/);
+                    if (match) {
+                        const count = parseInt(match[1]) || 1; const sides = parseInt(match[2]);
+                        let total = 0; let rolls = [];
+                        for(let i=0; i<count; i++) { const r = Math.floor(Math.random() * sides) + 1; total += r; rolls.push(r); }
+                        text = `🎲 Rolled ${count}d${sides}: **${total}** ` + (count > 1 ? `(${rolls.join(', ')})` : '');
                     } else {
-                        await setDoc(doc(db, 'chats_meta', 'group_general'), { lastSenderId: currentUser.uid, lastSenderName: document.getElementById('my-username').textContent, timestamp: serverTimestamp() }, {merge:true});
+                        text = `🎲 Rolled a d20: **${Math.floor(Math.random() * 20) + 1}**`;
                     }
-                    input.value = '';
-                } catch (error) {}
+                }
+                else if (cmd === '/coinflip') {
+                    const outcome = Math.random() > 0.5 ? 'Heads' : 'Tails';
+                    text = `🪙 Flipped a coin: **${outcome}**`;
+                }
+                else if (cmd === '/8ball') {
+                    const answers = ["It is certain.", "Without a doubt.", "Reply hazy, try again.", "Ask again later.", "Don't count on it.", "My sources say no."];
+                    const answer = answers[Math.floor(Math.random() * answers.length)];
+                    text = `🎱 **Question:** ${args || "Will I win?"}\n**Answer:** ${answer}`;
+                }
+                else if (cmd === '/theme') {
+                    const validThemes = ['dark', 'light', 'hacker', 'sunset', 'smelly'];
+                    if (validThemes.includes(args.toLowerCase())) { setTheme(args.toLowerCase()); showToast("Theme Updated", `Switched to ${args} mode.`); } 
+                    else { showToast("Error", "Valid themes: dark, light, hacker, sunset, smelly"); }
+                    input.value = ''; return; // Stop execution, don't send to DB
+                }
+                else if (cmd === '/clear') {
+                    document.getElementById('messages-container').innerHTML = '';
+                    showToast("Screen Cleared", "Local chat history hidden.");
+                    input.value = ''; return; // Stop execution, don't send to DB
+                }
+                else {
+                    showToast("Unknown Command", "Try /roll, /coinflip, /8ball, /shrug, /theme, /clear");
+                    input.value = ''; return; // Stop execution
+                }
             }
+
+            // Normal text sending logic
+            try {
+                playPopSound();
+                const payload = { type: 'text', ciphertext: CryptoJS.AES.encrypt(text, GLOBAL_OBFUSCATION_KEY).toString(), senderId: currentUser.uid, createdAt: serverTimestamp(), isPinned: false, isEdited: false, reactions: {} };
+                if (replyingToMsg) { payload.replyToId = replyingToMsg.id; payload.replyToText = replyingToMsg.text; cancelReply(); }
+                await addDoc(collection(db, 'chats', currentChatId, 'messages'), payload);
+                
+                if (!currentChatUser.isGroup) {
+                    await setDoc(doc(db, 'chats_meta', currentChatId), { unreadBy: currentChatUser.uid, typing: null }, { merge: true });
+                } else {
+                    await setDoc(doc(db, 'chats_meta', 'group_general'), { lastSenderId: currentUser.uid, lastSenderName: document.getElementById('my-username').textContent, timestamp: serverTimestamp() }, {merge:true});
+                }
+                input.value = '';
+            } catch (error) { console.error("Error sending message:", error); }
         });
+
 
         document.getElementById('chat-image-upload').addEventListener('change', async (e) => {
             const file = e.target.files[0]; if (!file || !currentChatId) return; e.target.value = ''; 
