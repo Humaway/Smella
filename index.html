@@ -445,8 +445,8 @@
         window.addEventListener('unload', () => { setUserStatus('offline'); });
         window.addEventListener('beforeunload', () => { setUserStatus('offline'); });
 
-                // ==========================================
-        // AUTHENTICATION
+         // ==========================================
+        // AUTHENTICATION & SETTINGS
         // ==========================================
         window.toggleAuthView = function(view) {
             if (view === 'signup') {
@@ -458,16 +458,48 @@
             }
         };
 
+        // --- SETTINGS LOGIC ---
+        document.getElementById('btn-settings').addEventListener('click', () => {
+            if (!currentUser) return; // Safety check
+            const myProfile = allUsersMap[currentUser.uid];
+            if (myProfile) {
+                document.getElementById('settings-username-input').value = myProfile.username || '';
+                document.getElementById('settings-color-input').value = myProfile.nameColor || '#ffffff';
+                const muteGroupEl = document.getElementById('settings-mute-group');
+                if (muteGroupEl) muteGroupEl.checked = myProfile.muteGroupNotifications || false;
+            }
+            document.getElementById('settings-modal').classList.remove('hidden');
+        });
+
+        document.getElementById('close-settings').addEventListener('click', () => {
+            document.getElementById('settings-modal').classList.add('hidden');
+        });
+
+        document.getElementById('btn-save-profile').addEventListener('click', async () => {
+            const newName = document.getElementById('settings-username-input').value.trim();
+            const newColor = document.getElementById('settings-color-input').value;
+            const muteGroupEl = document.getElementById('settings-mute-group');
+            const muteGroup = muteGroupEl ? muteGroupEl.checked : false;
+            
+            if (newName && currentUser) {
+                await setDoc(doc(db, "users", currentUser.uid), { 
+                    username: newName, 
+                    nameColor: newColor, 
+                    muteGroupNotifications: muteGroup 
+                }, { merge: true });
+                document.getElementById('settings-modal').classList.add('hidden'); 
+                showToast("Success", "Profile updated successfully!");
+            }
+        });
+
+        // --- AUTH LOGIC ---
         document.getElementById('signup-form').addEventListener('submit', async (e) => {
             e.preventDefault(); 
             unlockAudio(); 
-            
             const username = document.getElementById('signup-username').value.trim(); 
             const password = document.getElementById('signup-password').value; 
-            
             if (!username) return document.getElementById('signup-error').textContent = "Username required";
             
-            // Create a fake email behind the scenes so Firebase Auth allows it
             const fakeEmail = username.toLowerCase().replace(/[^a-z0-9]/g, '') + "@smelly.local";
 
             try { 
@@ -486,7 +518,6 @@
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault(); 
             unlockAudio(); 
-            
             const username = document.getElementById('login-username').value.trim(); 
             const password = document.getElementById('login-password').value; 
             const fakeEmail = username.toLowerCase().replace(/[^a-z0-9]/g, '') + "@smelly.local";
@@ -497,6 +528,9 @@
                 document.getElementById('login-error').textContent = "Invalid username or password."; 
             }
         });
+        
+        document.getElementById('btn-logout').addEventListener('click', () => signOut(auth));
+
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
