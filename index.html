@@ -1047,9 +1047,87 @@
                     const msgHTML = `${actionsHTML}<div class="avatar-frame">${getAvatarHTML(senderProfile)}</div><div class="msg-content"><div class="msg-header"><span class="msg-username" style="color: ${customNameColor}">${senderProfile?.username || 'Unknown'}</span><span class="msg-time">Today at ${timeString} ${editedTag}</span></div>${quotedHTML}${contentHTML}${reactionsHTML}</div>`;
                     const msgDiv = document.createElement('div'); msgDiv.classList.add('message'); msgDiv.id = `msg-${msgId}`; msgDiv.innerHTML = msgHTML;
                     msgDiv.addEventListener('touchstart', (e) => handleTouchStart(e, msgId), {passive: true}); msgDiv.addEventListener('touchend', handleTouchEnd); msgDiv.addEventListener('touchmove', handleTouchMove, {passive: true}); msgDiv.addEventListener('touchcancel', handleTouchEnd);
+        function loadChatMessages() {
+            const container = document.getElementById('messages-container'); const pinnedBar = document.getElementById('pinned-bar'); const pinnedContent = document.getElementById('pinned-content'); const typingInd = document.getElementById('typing-indicator');
+            if (unsubscribeChat) unsubscribeChat(); if (unsubscribeMetaRealtime) unsubscribeMetaRealtime();
+            let isMyLastMessage = false; let hasFriendRead = false; let isFirstLoad = true;
+
+            const updateReadReceiptUI = () => {
+                if (currentChatUser && currentChatUser.isGroup) return; 
+                let receiptEl = document.getElementById('dynamic-read-receipt');
+                if (!receiptEl) { receiptEl = document.createElement('div'); receiptEl.id = 'dynamic-read-receipt'; receiptEl.classList.add('read-receipt'); container.appendChild(receiptEl); }
+                if (isMyLastMessage && hasFriendRead) { receiptEl.textContent = 'Read'; receiptEl.style.display = 'block'; } else { receiptEl.style.display = 'none'; }
+            };
+
+            unsubscribeMetaRealtime = onSnapshot(doc(db, 'chats_meta', currentChatId), (metaSnap) => {
+                const metaData = metaSnap.data();
+                
+                if (metaData && metaData.callActive === false && rtcManager.chatId === currentChatId) { rtcManager.leave(false); }
+
+                const btnStart = document.getElementById('btn-start-call'); const btnJoin = document.getElementById('btn-join-call');
+                
+                if (!rtcManager.chatId) {
+                    if (metaData && metaData.callActive) { btnJoin.classList.remove('hidden'); btnStart.classList.add('hidden'); btnJoin.textContent = currentChatUser.isGroup ? "📞 Join Call" : "📞 Answer";
+                    } else { btnJoin.classList.add('hidden'); btnStart.classList.remove('hidden'); }
+                } else { btnJoin.classList.add('hidden'); btnStart.classList.add('hidden'); }
+
+                if (!currentChatUser.isGroup) {
+                    if (metaData && metaData.unreadBy === currentUser.uid) { updateDoc(doc(db, 'chats_meta', currentChatId), { unreadBy: null }); }
+                    hasFriendRead = metaData && metaData.unreadBy === null; updateReadReceiptUI();
+                    if (metaData && metaData.typing && metaData.typing !== currentUser.uid) { typingInd.textContent = `${currentChatUser.username} is typing...`; typingInd.classList.remove('hidden'); } else { typingInd.classList.add('hidden'); }
+                } else { typingInd.classList.add('hidden'); let receiptEl = document.getElementById('dynamic-read-receipt'); if (receiptEl) receiptEl.style.display = 'none'; }
+            });
+
+            const q = query(collection(db, 'chats', currentChatId, 'messages'), orderBy('createdAt', 'asc'));
+            unsubscribeChat = onSnapshot(q, (snapshot) => {
+                container.innerHTML = ''; pinnedContent.innerHTML = ''; let hasPins = false; let lastMessageData = null;
+                snapshot.docChanges().forEach((change) => { if (change.type === 'added' && !isFirstLoad) { if (change.doc.data().senderId !== currentUser.uid) playDingSound(); } });
+
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data(); const msgId = docSnap.id; lastMessageData = data;
+                    
+                    if (data.type === 'system') {
+                        const sysDiv = document.createElement('div');
+                        sysDiv.style.textAlign = "center"; sysDiv.style.color = "var(--text-muted)"; sysDiv.style.fontSize = "0.85rem"; sysDiv.style.margin = "15px 0"; sysDiv.style.fontWeight = "bold";
+                        sysDiv.innerHTML = data.text; container.appendChild(sysDiv); return; 
+                    }
+
+                    let decryptedText = "[Error]"; try { decryptedText = CryptoJS.AES.decrypt(data.ciphertext, GLOBAL_OBFUSCATION_KEY).toString(CryptoJS.enc.Utf8); } catch (e) {}
+                    let timeString = data.createdAt ? data.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Sending...";
+                    const senderProfile = allUsersMap[data.senderId] || { username: 'Unknown' }; 
+                    const isMe = data.senderId === currentUser.uid;
+
+                    let contentHTML = '';
+                    if (data.type === 'image') { 
+                        contentHTML = `<img src="${decryptedText}" class="msg-image" alt="Shared Image" onclick="openLightbox(this.src)" onload="scrollToBottom()">`; 
+                    } else { 
+                        // Markdown Formatter (with null-safety fallback)
+                        let safeText = decryptedText || "";
+                        let formattedText = safeText.replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                            .replace(/\*(.*?)\*/g, '<em>$1</em>');
+                        contentHTML = `<div class="msg-text">${formattedText}</div>`; 
+                    }
+                    
+                    let quotedHTML = ''; if (data.replyToId && data.replyToText) { const safeReplyText = data.replyToText.replace(/</g, "&lt;").replace(/>/g, "&gt;"); quotedHTML = `<div class="quoted-message" onclick="scrollToMsg('${data.replyToId}')">${safeReplyText}</div>`; }
+
+                    let reactionsHTML = '<div class="reactions-container">';
+                    if (data.reactions) { for (const [emoji, users] of Object.entries(data.reactions)) { if (users.length > 0) { const iReacted = users.includes(currentUser.uid); reactionsHTML += `<span class="reaction-badge ${iReacted ? 'active' : ''}" onclick="toggleReaction('${msgId}', '${emoji}')">${emoji} ${users.length}</span>`; } } }
+                    reactionsHTML += '</div>';
+
+                    const safeTextForReply = data.type === 'image' ? '[Image]' : (decryptedText || "").replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    let actionsHTML = `<div class="msg-actions"><span class="quick-reacts"><button class="msg-action-btn" onclick="toggleReaction('${msgId}', '👍')">👍</button><button class="msg-action-btn" onclick="toggleReaction('${msgId}', '❤️')">❤️</button><button class="msg-action-btn" onclick="toggleReaction('${msgId}', '😂')">😂</button></span><button class="msg-action-btn" title="Reply" onclick="startReply('${msgId}', '${safeTextForReply}')">↩</button><button class="msg-action-btn" onclick="togglePin('${msgId}', ${data.isPinned || false})">${data.isPinned ? 'Unpin' : 'Pin'}</button>`;
+                    if (isMe && data.type !== 'image') { actionsHTML += `<button class="msg-action-btn" onclick="editMessage('${msgId}', '${safeTextForReply}')">Edit</button>`; } actionsHTML += `</div>`;
+
+                    const editedTag = data.isEdited ? `<span class="msg-edited">(edited)</span>` : '';
+                    const customNameColor = senderProfile?.nameColor || 'var(--text-header)';
+
+                    const msgHTML = `${actionsHTML}<div class="avatar-frame">${getAvatarHTML(senderProfile)}</div><div class="msg-content"><div class="msg-header"><span class="msg-username" style="color: ${customNameColor}">${senderProfile?.username || 'Unknown'}</span><span class="msg-time">Today at ${timeString} ${editedTag}</span></div>${quotedHTML}${contentHTML}${reactionsHTML}</div>`;
+                    const msgDiv = document.createElement('div'); msgDiv.classList.add('message'); msgDiv.id = `msg-${msgId}`; msgDiv.innerHTML = msgHTML;
+                    msgDiv.addEventListener('touchstart', (e) => handleTouchStart(e, msgId), {passive: true}); msgDiv.addEventListener('touchend', handleTouchEnd); msgDiv.addEventListener('touchmove', handleTouchMove, {passive: true}); msgDiv.addEventListener('touchcancel', handleTouchEnd);
                     container.appendChild(msgDiv);
 
-                    if (data.isPinned) { hasPins = true; const pinDiv = document.createElement('div'); pinDiv.classList.add('pinned-msg'); pinDiv.onclick = () => scrollToMsg(msgId); pinDiv.innerHTML = `<strong style="color: ${customNameColor}">${senderProfile?.username}:</strong> ${data.type === 'image' ? '[Image]' : decryptedText}`; pinnedContent.appendChild(pinDiv); }
+                    if (data.isPinned) { hasPins = true; const pinDiv = document.createElement('div'); pinDiv.classList.add('pinned-msg'); pinDiv.onclick = () => scrollToMsg(msgId); pinDiv.innerHTML = `<strong style="color: ${customNameColor}">${senderProfile?.username}:</strong> ${data.type === 'image' ? '[Image]' : (decryptedText || "")}`; pinnedContent.appendChild(pinDiv); }
                 });
 
                 pinnedBar.style.display = hasPins ? 'block' : 'none'; isMyLastMessage = lastMessageData && lastMessageData.senderId === currentUser.uid; updateReadReceiptUI(); scrollToBottom(); isFirstLoad = false;
@@ -1098,20 +1176,19 @@
                     const validThemes = ['dark', 'light', 'hacker', 'sunset', 'smelly'];
                     if (validThemes.includes(args.toLowerCase())) { setTheme(args.toLowerCase()); showToast("Theme Updated", `Switched to ${args} mode.`); } 
                     else { showToast("Error", "Valid themes: dark, light, hacker, sunset, smelly"); }
-                    input.value = ''; return; // Stop execution, don't send to DB
+                    input.value = ''; return; 
                 }
                 else if (cmd === '/clear') {
                     document.getElementById('messages-container').innerHTML = '';
                     showToast("Screen Cleared", "Local chat history hidden.");
-                    input.value = ''; return; // Stop execution, don't send to DB
+                    input.value = ''; return; 
                 }
                 else {
                     showToast("Unknown Command", "Try /roll, /coinflip, /8ball, /shrug, /theme, /clear");
-                    input.value = ''; return; // Stop execution
+                    input.value = ''; return; 
                 }
             }
 
-            // Normal text sending logic
             try {
                 playPopSound();
                 const payload = { type: 'text', ciphertext: CryptoJS.AES.encrypt(text, GLOBAL_OBFUSCATION_KEY).toString(), senderId: currentUser.uid, createdAt: serverTimestamp(), isPinned: false, isEdited: false, reactions: {} };
@@ -1126,33 +1203,6 @@
                 input.value = '';
             } catch (error) { console.error("Error sending message:", error); }
         });
-
-
-        document.getElementById('chat-image-upload').addEventListener('change', async (e) => {
-            const file = e.target.files[0]; if (!file || !currentChatId) return; e.target.value = ''; 
-            const reader = new FileReader(); reader.readAsDataURL(file);
-            reader.onload = (event) => {
-                const img = new Image(); img.src = event.target.result;
-                img.onload = async () => {
-                    const canvas = document.createElement('canvas'); let width = img.width, height = img.height; const MAX_SIZE = 800; 
-                    if (width > height) { if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; } } else { if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; } }
-                    canvas.width = width; canvas.height = height; canvas.getContext('2d').drawImage(img, 0, 0, width, height); const base64Img = canvas.toDataURL('image/jpeg', 0.6); 
-                    try {
-                        playPopSound(); 
-                        const payload = { type: 'image', ciphertext: CryptoJS.AES.encrypt(base64Img, GLOBAL_OBFUSCATION_KEY).toString(), senderId: currentUser.uid, createdAt: serverTimestamp(), isPinned: false, reactions: {} };
-                        if (replyingToMsg) { payload.replyToId = replyingToMsg.id; payload.replyToText = replyingToMsg.text; cancelReply(); }
-                        await addDoc(collection(db, 'chats', currentChatId, 'messages'), payload);
-                        
-                        if (!currentChatUser.isGroup) {
-                            await setDoc(doc(db, 'chats_meta', currentChatId), { unreadBy: currentChatUser.uid, typing: null }, { merge: true });
-                        } else {
-                            await setDoc(doc(db, 'chats_meta', 'group_general'), { lastSenderId: currentUser.uid, lastSenderName: document.getElementById('my-username').textContent, timestamp: serverTimestamp() }, {merge:true});
-                        }
-                    } catch (error) {}
-                }
-            }
-        });
-
     </script>
 </body>
 </html>
