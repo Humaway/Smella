@@ -1175,16 +1175,16 @@
                     const validThemes = ['dark', 'light', 'hacker', 'sunset', 'smelly'];
                     if (validThemes.includes(args.toLowerCase())) { setTheme(args.toLowerCase()); showToast("Theme Updated", `Switched to ${args} mode.`); } 
                     else { showToast("Error", "Valid themes: dark, light, hacker, sunset, smelly"); }
-                    input.value = ''; return; 
+                    input.value = ''; return; // Stop execution, don't send to DB
                 }
                 else if (cmd === '/clear') {
                     document.getElementById('messages-container').innerHTML = '';
                     showToast("Screen Cleared", "Local chat history hidden.");
-                    input.value = ''; return; 
+                    input.value = ''; return; // Stop execution, don't send to DB
                 }
                 else {
                     showToast("Unknown Command", "Try /roll, /coinflip, /8ball, /shrug, /theme, /clear");
-                    input.value = ''; return; 
+                    input.value = ''; return; // Stop execution
                 }
             }
 
@@ -1202,6 +1202,32 @@
                 input.value = '';
             } catch (error) { console.error("Error sending message:", error); }
         });
+
+        document.getElementById('chat-image-upload').addEventListener('change', async (e) => {
+            const file = e.target.files[0]; if (!file || !currentChatId) return; e.target.value = ''; 
+            const reader = new FileReader(); reader.readAsDataURL(file);
+            reader.onload = (event) => {
+                const img = new Image(); img.src = event.target.result;
+                img.onload = async () => {
+                    const canvas = document.createElement('canvas'); let width = img.width, height = img.height; const MAX_SIZE = 800; 
+                    if (width > height) { if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; } } else { if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; } }
+                    canvas.width = width; canvas.height = height; canvas.getContext('2d').drawImage(img, 0, 0, width, height); const base64Img = canvas.toDataURL('image/jpeg', 0.6); 
+                    try {
+                        playPopSound(); 
+                        const payload = { type: 'image', ciphertext: CryptoJS.AES.encrypt(base64Img, GLOBAL_OBFUSCATION_KEY).toString(), senderId: currentUser.uid, createdAt: serverTimestamp(), isPinned: false, reactions: {} };
+                        if (replyingToMsg) { payload.replyToId = replyingToMsg.id; payload.replyToText = replyingToMsg.text; cancelReply(); }
+                        await addDoc(collection(db, 'chats', currentChatId, 'messages'), payload);
+                        
+                        if (!currentChatUser.isGroup) {
+                            await setDoc(doc(db, 'chats_meta', currentChatId), { unreadBy: currentChatUser.uid, typing: null }, { merge: true });
+                        } else {
+                            await setDoc(doc(db, 'chats_meta', 'group_general'), { lastSenderId: currentUser.uid, lastSenderName: document.getElementById('my-username').textContent, timestamp: serverTimestamp() }, {merge:true});
+                        }
+                    } catch (error) {}
+                }
+            }
+        });
+
     </script>
 </body>
 </html>
